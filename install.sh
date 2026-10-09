@@ -12,7 +12,7 @@ info()  { printf "${B}>>>${N} %s\n" "$*"; }
 ok()    { printf "${G}  OK${N}  %s\n" "$*"; }
 warn()  { printf "${Y}  !!${N}  %s\n" "$*"; }
 fail()  { printf "${R} FAIL${N} %s\n" "$*"; exit 1; }
-prompt(){ printf "${B}  ?${N} %s " "$*"; read -r "$1"; }
+prompt(){ printf "${B}  ?${N} %s " "$*"; read -r REPLY; }
 prompt_silent() {
     # Prompt for a password without echoing input to the terminal.
     printf "${B}  ?${N} %s " "$1"
@@ -137,14 +137,47 @@ if [ "$has_qbt" -eq 0 ]; then
 fi
 
 # ── Interactive configuration ────────────────────────────────────────────
-echo ""
-info "Let's configure your installation."
-echo ""
+# Load config file if it exists — pre-fills all prompts with user values.
+# File locations checked (first match wins):
+#   ~/.config/torrents-ui/torrents-csv.conf
+#   ~/.torrents-csv.conf
+#   ./torrents-csv.conf  (in the repo/install dir)
+CONFIG_FILE=""
+for f in \
+    "$HOME/.config/torrents-ui/torrents-csv.conf" \
+    "$HOME/.torrents-csv.conf" \
+    "$HERE/torrents-csv.conf"; do
+    if [ -f "$f" ]; then
+        CONFIG_FILE="$f"
+        break
+    fi
+done
+
+if [ -n "$CONFIG_FILE" ]; then
+    info "Loading config from $CONFIG_FILE"
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+    ok "config loaded — prompts will use these values as defaults"
+    echo ""
+else
+    info "No config file found. You'll be prompted for everything interactively."
+    info "Tip: after install, edit ~/.config/torrents-ui/torrents-csv.conf to tune values."
+    echo ""
+fi
+
+# All config variables with built-in defaults. Config file overrides defaults.
+INSTALL_DIR="${INSTALL_DIR:-$HOME/torrents-csv}"
+UI_PORT="${UI_PORT:-8888}"
+TV_ROOT="${TV_ROOT:-$HOME/media/TV}"
+MOVIES_ROOT="${MOVIES_ROOT:-$HOME/media/Movies}"
+QBT_URL="${QBT_URL:-http://localhost:8081}"
+QBT_USER="${QBT_USER:-admin}"
+QBT_PASS="${QBT_PASS:-}"
+SYNC_INTERVAL="${SYNC_INTERVAL:-daily}"
 
 # Install directory
-DEFAULT_DIR="$HOME/torrents-csv"
-prompt INSTALL_DIR "Where to store the data? [$DEFAULT_DIR]"
-INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_DIR}"
+prompt INSTALL_DIR "Where to store the data? [$INSTALL_DIR]"
+INSTALL_DIR="${REPLY:-$INSTALL_DIR}"
 info "Data directory: $INSTALL_DIR"
 
 # Create directory structure
@@ -154,9 +187,8 @@ done
 ok "Directory structure created"
 
 # UI port
-DEFAULT_PORT=8888
-prompt UI_PORT "Port for the web UI? [$DEFAULT_PORT]"
-UI_PORT="${UI_PORT:-$DEFAULT_PORT}"
+prompt UI_PORT "Port for the web UI? [$UI_PORT]"
+UI_PORT="${REPLY:-$UI_PORT}"
 # Check if port is already in use
 if command -v ss >/dev/null 2>&1; then
     if ss -tlnp 2>/dev/null | grep -q ":$UI_PORT\b"; then
@@ -174,16 +206,14 @@ fi
 ok "UI port: $UI_PORT (http://127.0.0.1:$UI_PORT)"
 
 # TV root
-DEFAULT_TV="$HOME/media/TV"
-prompt TV_ROOT "Where are your TV shows stored? [$DEFAULT_TV]"
-TV_ROOT="${TV_ROOT:-$DEFAULT_TV}"
+prompt TV_ROOT "Where are your TV shows stored? [$TV_ROOT]"
+TV_ROOT="${REPLY:-$TV_ROOT}"
 mkdir -p "$TV_ROOT" 2>/dev/null || warn "could not create $TV_ROOT (may need sudo later)"
 ok "TV root: $TV_ROOT"
 
 # Movies root
-DEFAULT_MOVIES="$HOME/media/Movies"
-prompt MOVIES_ROOT "Where are your movies stored? [$DEFAULT_MOVIES]"
-MOVIES_ROOT="${MOVIES_ROOT:-$DEFAULT_MOVIES}"
+prompt MOVIES_ROOT "Where are your movies stored? [$MOVIES_ROOT]"
+MOVIES_ROOT="${REPLY:-$MOVIES_ROOT}"
 mkdir -p "$MOVIES_ROOT" 2>/dev/null || warn "could not create $MOVIES_ROOT"
 ok "Movies root: $MOVIES_ROOT"
 
@@ -196,13 +226,18 @@ if [ "$has_qbt" -eq 1 ]; then
     echo ""
 
     DEFAULT_QBT_URL="http://localhost:8081"
-    prompt QBT_URL "qBittorrent WebUI URL? [$DEFAULT_QBT_URL]"
-    QBT_URL="${QBT_URL:-$DEFAULT_QBT_URL}"
+    prompt QBT_URL "qBittorrent WebUI URL? [$QBT_URL]"
+    QBT_URL="${REPLY:-$QBT_URL}"
 
-    prompt QBT_USER "qBittorrent WebUI username? [admin]"
-    QBT_USER="${QBT_USER:-admin}"
+    prompt QBT_USER "qBittorrent WebUI username? [$QBT_USER]"
+    QBT_USER="${REPLY:-$QBT_USER}"
 
-    prompt_silent "qBittorrent WebUI password?" QBT_PASS "password"
+    # If password was already in config, skip the prompt entirely
+    if [ -n "$QBT_PASS" ]; then
+        ok "qBittorrent password loaded from config"
+    else
+        prompt_silent "qBittorrent WebUI password?" QBT_PASS "password"
+    fi
 
     # Test qBt connection
     info "Testing qBittorrent connection..."
@@ -248,6 +283,37 @@ cat > "$QBT_CONFIG_DIR/qbt.json" <<QBTJSON
 QBTJSON
 chmod 600 "$QBT_CONFIG_DIR/qbt.json"
 ok "qBittorrent config → $QBT_CONFIG_DIR/qbt.json"
+
+# Write the user-facing config file (for re-running installer or tuning)
+USER_CONFIG_DIR="$HOME/.config/torrents-ui"
+mkdir -p "$USER_CONFIG_DIR"
+cat > "$USER_CONFIG_DIR/torrents-csv.conf" <<CONF
+# torrents-csv configuration — edit and re-run install.sh to apply changes.
+# Lines starting with # are comments. Uncomment and edit to override.
+
+# Where the data lives (DB, downloads, state, logs)
+INSTALL_DIR="$INSTALL_DIR"
+
+# Port for the Django web UI
+UI_PORT=$UI_PORT
+
+# TV shows directory (for the folder picker)
+TV_ROOT="$TV_ROOT"
+
+# Movies directory (for Movie downloads)
+MOVIES_ROOT="$MOVIES_ROOT"
+
+# qBittorrent WebUI connection
+QBT_URL="$QBT_URL"
+QBT_USER="$QBT_USER"
+QBT_PASS="$QBT_PASS"
+
+# Sync interval: daily or hourly
+SYNC_INTERVAL="$SYNC_INTERVAL"
+CONF
+chmod 600 "$USER_CONFIG_DIR/torrents-csv.conf"
+ok "Config file → $USER_CONFIG_DIR/torrents-csv.conf"
+ok "  Edit this file and re-run install.sh to reconfigure without re-prompting"
 
 # ── Copy code into install dir ───────────────────────────────────────────
 info "Copying code to $INSTALL_DIR..."
@@ -307,11 +373,11 @@ Nice=10
 SVCSYNC
     cat > "$HOME/.config/systemd/user/torrents-csv-sync.timer" <<TMRSYNC
 [Unit]
-Description=Daily torrents-csv sync timer
+Description=Torrents-csv sync timer
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=24h
+$([ "$SYNC_INTERVAL" = "hourly" ] && echo "OnUnitActiveSec=1h" || echo "OnUnitActiveSec=24h")
 Persistent=true
 AccuracySec=1min
 
