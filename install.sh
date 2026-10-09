@@ -13,6 +13,15 @@ ok()    { printf "${G}  OK${N}  %s\n" "$*"; }
 warn()  { printf "${Y}  !!${N}  %s\n" "$*"; }
 fail()  { printf "${R} FAIL${N} %s\n" "$*"; exit 1; }
 prompt(){ printf "${B}  ?${N} %s " "$*"; read -r "$1"; }
+prompt_silent() {
+    # Prompt for a password without echoing input to the terminal.
+    printf "${B}  ?${N} %s " "$1"
+    stty -echo 2>/dev/null || true
+    read -r "$2"
+    stty echo 2>/dev/null || true
+    printf "\n"
+    printf "${G}  OK${N}  %s set\n" "$3"
+}
 
 # ── Detect OS ────────────────────────────────────────────────────────────
 OS="linux"
@@ -148,7 +157,21 @@ ok "Directory structure created"
 DEFAULT_PORT=8888
 prompt UI_PORT "Port for the web UI? [$DEFAULT_PORT]"
 UI_PORT="${UI_PORT:-$DEFAULT_PORT}"
-ok "UI port: $UI_PORT"
+# Check if port is already in use
+if command -v ss >/dev/null 2>&1; then
+    if ss -tlnp 2>/dev/null | grep -q ":$UI_PORT\b"; then
+        warn "port $UI_PORT appears to be in use — the UI may fail to start"
+    else
+        ok "port $UI_PORT is free"
+    fi
+elif command -v lsof >/dev/null 2>&1; then
+    if lsof -i :"$UI_PORT" >/dev/null 2>&1; then
+        warn "port $UI_PORT appears to be in use — the UI may fail to start"
+    else
+        ok "port $UI_PORT is free"
+    fi
+fi
+ok "UI port: $UI_PORT (http://127.0.0.1:$UI_PORT)"
 
 # TV root
 DEFAULT_TV="$HOME/media/TV"
@@ -179,8 +202,7 @@ if [ "$has_qbt" -eq 1 ]; then
     prompt QBT_USER "qBittorrent WebUI username? [admin]"
     QBT_USER="${QBT_USER:-admin}"
 
-    prompt QBT_PASS "qBittorrent WebUI password? "
-    [ -z "$QBT_PASS" ] && warn "no password set — qBittorrent may reject requests" || ok "password set"
+    prompt_silent "qBittorrent WebUI password?" QBT_PASS "password"
 
     # Test qBt connection
     info "Testing qBittorrent connection..."
@@ -432,12 +454,30 @@ info "Installation complete!"
 echo ""
 printf "${G}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}\n"
 printf "  Data directory:    ${B}%s${N}\n" "$INSTALL_DIR"
-printf "  Web UI:            ${B}http://127.0.0.1:%s/${N}\n" "$UI_PORT"
 printf "  TV root:           ${B}%s${N}\n" "$TV_ROOT"
 printf "  Movies root:       ${B}%s${N}\n" "$MOVIES_ROOT"
-printf "  qBittorrent:       ${B}%s${N}\n" "$QBT_URL"
 printf "  Sync schedule:     ${B}daily${N}\n"
 printf "${G}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}\n"
+echo ""
+printf "${B}  Port allocation:${N}\n"
+echo "  ┌────────────────────────┬──────────┬──────────────────────────────────┐"
+printf "  │ Service                │ Port     │ Purpose                          │\n"
+printf "  ├────────────────────────┼──────────┼──────────────────────────────────┤\n"
+printf "  │ Django web UI          │ %-8s │ Search + download interface      │\n" "$UI_PORT"
+if [ "$has_qbt" -eq 1 ]; then
+    # Extract port from QBT_URL
+    QBT_PORT=$(echo "$QBT_URL" | sed 's|.*:||; s|/.*||')
+    printf "  │ qBittorrent WebUI      │ %-8s │ Torrent management + download    │\n" "$QBT_PORT"
+fi
+printf "  │ Upstream data (fetch)  │ 443      │ HTTPS to codeberg.org            │\n"
+printf "  └────────────────────────┴──────────┴──────────────────────────────────┘"
+echo ""
+echo ""
+printf "${B}  URLs:${N}\n"
+printf "  Web UI:            ${B}http://127.0.0.1:%s/${N}\n" "$UI_PORT"
+if [ "$has_qbt" -eq 1 ]; then
+    printf "  qBittorrent:       ${B}%s${N}\n" "$QBT_URL"
+fi
 echo ""
 printf "  Open the UI:       ${B}open http://127.0.0.1:%s/${N}  (mac)\n" "$UI_PORT"
 printf "                      ${B}xdg-open http://127.0.0.1:%s/${N}  (linux)\n" "$UI_PORT"
@@ -445,12 +485,16 @@ echo ""
 printf "  Re-run sync now:   ${B}TORRENTS_CSV_DIR=%s python3 %s/bin/sync.py${N}\n" "$INSTALL_DIR" "$INSTALL_DIR"
 echo ""
 printf "  Config files:\n"
-printf "    qBittorrent:     ${B}%s/qbt.json${N}\n" "$QBT_CONFIG_DIR"
+if [ "$has_qbt" -eq 1 ]; then
+    printf "    qBittorrent:     ${B}%s/qbt.json${N}\n" "$QBT_CONFIG_DIR"
+fi
 if [ "$OS" = "linux" ] && [ "$has_systemd" -eq 1 ]; then
     printf "    Services:        ${B}~/.config/systemd/user/torrents-csv-*${N}\n"
 elif [ "$OS" = "mac" ]; then
     printf "    Services:        ${B}~/Library/LaunchAgents/com.torrents-csv.*${N}\n"
 fi
+printf "    Data/DB:         ${B}%s/torrents.db${N}\n" "$INSTALL_DIR"
+printf "    Logs:            ${B}%s/logs/${N}\n" "$INSTALL_DIR"
 echo ""
 
 # Verify UI is reachable
