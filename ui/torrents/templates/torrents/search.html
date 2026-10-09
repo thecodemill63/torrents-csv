@@ -1,0 +1,367 @@
+{% extends "torrents/base.html" %}
+{% load humanize %}
+{% load torrent_extras %}
+
+{% block title %}{% if q %}{{ q }} &middot; {% endif %}torrents-csv{% endblock %}
+
+{% block content %}
+{% if page_obj.object_list %}
+
+<div class="result-meta muted">
+  Showing {{ first_index|intcomma }}&ndash;{{ last_index|intcomma }}
+  of {{ total_count|intcomma }} torrents{% if q %} matching &ldquo;{{ q }}&rdquo;{% endif %}
+</div>
+
+<table class="results">
+  <thead>
+    <tr>
+      <th class="name-col">Name</th>
+      <th class="num {% if sort == 'size_bytes' %}active{% endif %}">
+        <a href="{{ sort_links.size_bytes }}">Size{% if sort == 'size_bytes' %} <span class="arrow">{{ sort_arrows.size_bytes }}</span>{% endif %}</a>
+      </th>
+      <th class="num {% if sort == 'seeders' %}active{% endif %}">
+        <a href="{{ sort_links.seeders }}">Seeders{% if sort == 'seeders' %} <span class="arrow">{{ sort_arrows.seeders }}</span>{% endif %}</a>
+      </th>
+      <th class="num {% if sort == 'leechers' %}active{% endif %}">
+        <a href="{{ sort_links.leechers }}">Leechers{% if sort == 'leechers' %} <span class="arrow">{{ sort_arrows.leechers }}</span>{% endif %}</a>
+      </th>
+      <th class="num hide-sm">Completed</th>
+      <th class="hide-sm {% if sort == 'published' %}active{% endif %}">
+        <a href="{{ sort_links.published }}" class="hide-sm">Published{% if sort == 'published' %} <span class="arrow">{{ sort_arrows.published }}</span>{% endif %}</a>
+      </th>
+      <th>Magnet</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in page_obj.object_list %}
+    <tr>
+      <td class="name"><a href="{{ t.magnet }}" title="{{ t.name }}">{{ t.name|default:'(unnamed)' }}</a></td>
+      <td class="num muted">{{ t.size_bytes|filesizeformat }}</td>
+      <td class="num seed">{{ t.seeders|intcomma }}</td>
+      <td class="num leech">{{ t.leechers|intcomma }}</td>
+      <td class="num muted hide-sm">{{ t.completed|default:0|intcomma }}</td>
+      <td class="hide-sm muted" title="{{ t.published|short_date }}">{{ t.published|rel_time }}</td>
+      <td class="magnet-cell">
+        <button type="button" class="magnet-link magnet-reveal" aria-label="Show magnet link">&#129728; show</button>
+        <button type="button" class="magnet-link dl-btn" data-magnet="{{ t.magnet }}" data-name="{{ t.name|default:''|escape }}" aria-label="Download to qBittorrent">&#11015; dl</button>
+        <input class="magnet-text" readonly value="{{ t.magnet }}" aria-label="Magnet link (Ctrl+C to copy)">
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination">
+  {% if page_url_prev %}
+    <a href="{{ page_url_prev }}" rel="prev">&laquo; Prev</a>
+  {% else %}
+    <span class="disabled">&laquo; Prev</span>
+  {% endif %}
+  <span class="current">Page {{ page_obj.number }} / {{ page_obj.num_pages }}</span>
+  {% if page_url_next %}
+    <a href="{{ page_url_next }}" rel="next">Next &raquo;</a>
+  {% else %}
+    <span class="disabled">Next &raquo;</span>
+  {% endif %}
+</div>
+
+{% else %}
+
+<div class="empty">
+  <div class="big">&#128269;</div>
+  {% if q %}
+    <p>No torrents match <strong>{{ q }}</strong>.</p>
+    <p class="muted">Search is case-insensitive and matches any part of the name.</p>
+  {% else %}
+    <p>No torrents in the database.</p>
+    <p class="muted">Run the sync pipeline first.</p>
+  {% endif %}
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block content_after %}
+<div class="dl-modal" id="dlModal" hidden>
+  <div class="dl-modal-card">
+    <!-- Page 1: category choice -->
+    <div class="dl-page" id="dlPageCategory">
+      <div class="dl-modal-title">Add to qBittorrent as&hellip;</div>
+      <div class="dl-modal-name" id="dlModalName"></div>
+      <div class="dl-modal-buttons">
+        <button type="button" data-cat="Movie" class="dl-cat dl-cat-movie">&#127916; Movie</button>
+        <button type="button" data-cat="TV Show" class="dl-cat dl-cat-tv">&#128250; TV Show</button>
+        <button type="button" class="dl-cat dl-cancel">Cancel</button>
+      </div>
+    </div>
+    <!-- Page 2: show folder picker -->
+    <div class="dl-page" id="dlPageShow" hidden>
+      <div class="dl-modal-title">Choose show folder</div>
+      <div class="dl-modal-name" id="dlModalName2"></div>
+      <input type="text" id="dlShowFilter" placeholder="Filter existing shows..." class="dl-folder-filter" autocomplete="off">
+      <div class="dl-folder-list" id="dlShowList"></div>
+      <div class="dl-new-folder-row">
+        <input type="text" id="dlNewShowName" placeholder="or type new show name..." class="dl-folder-input" autocomplete="off">
+        <button type="button" id="dlCreateShowBtn" class="dl-cat dl-create-btn">+ Create</button>
+      </div>
+      <div class="dl-modal-buttons">
+        <button type="button" class="dl-cat dl-back">&larr; Back</button>
+        <button type="button" class="dl-cat dl-cancel">Cancel</button>
+      </div>
+    </div>
+    <!-- Page 3: season folder picker -->
+    <div class="dl-page" id="dlPageSeason" hidden>
+      <div class="dl-modal-title">Choose season in <span id="dlSeasonShowName"></span></div>
+      <div class="dl-modal-name" id="dlModalName3"></div>
+      <input type="text" id="dlSeasonFilter" placeholder="Filter seasons..." class="dl-folder-filter" autocomplete="off">
+      <div class="dl-folder-list" id="dlSeasonList"></div>
+      <div class="dl-new-folder-row">
+        <input type="text" id="dlNewSeasonName" placeholder="or type new season name (e.g. Season 2)..." class="dl-folder-input" autocomplete="off">
+        <button type="button" id="dlCreateSeasonBtn" class="dl-cat dl-create-btn">+ Create</button>
+      </div>
+      <div class="dl-modal-buttons">
+        <button type="button" class="dl-cat dl-back">&larr; Back</button>
+        <button type="button" class="dl-cat dl-cancel">Cancel</button>
+      </div>
+    </div>
+    <div class="dl-modal-status muted" id="dlModalStatus"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  // --- Magnet reveal toggle ---
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.magnet-reveal');
+    if (!btn) return;
+    var cell = btn.closest('.magnet-cell');
+    var input = cell.querySelector('.magnet-text');
+    var shown = input.classList.toggle('shown');
+    btn.classList.toggle('revealed', shown);
+    btn.textContent = shown ? '\u{1F9EC} hide' : '\u{1F9EC} show';
+    if (shown) { input.focus(); input.select(); }
+  });
+
+  // --- Download popup (three-step: category → show → season) ---
+  var modal = document.getElementById('dlModal');
+  var pageCat = document.getElementById('dlPageCategory');
+  var pageShow = document.getElementById('dlPageShow');
+  var pageSeason = document.getElementById('dlPageSeason');
+  var modalStatus = document.getElementById('dlModalStatus');
+  var pendingMagnet = null, pendingName = null;
+  var chosenShow = null;
+  var tvRoot = null;
+
+  // Fetch TV root from server so we don't hardcode paths in JS.
+  fetch('/config/').then(function(r) { return r.json(); })
+  .then(function(d) { tvRoot = d.tv_root; })
+  .catch(function() { tvRoot = ''; });
+
+  function showPage(pg) {
+    pageCat.hidden = (pg !== 'cat');
+    pageShow.hidden = (pg !== 'show');
+    pageSeason.hidden = (pg !== 'season');
+  }
+  function openModal(magnet, name) {
+    pendingMagnet = magnet; pendingName = name;
+    document.getElementById('dlModalName').textContent = name || '(unnamed)';
+    document.getElementById('dlModalName2').textContent = name || '(unnamed)';
+    document.getElementById('dlModalName3').textContent = name || '(unnamed)';
+    modalStatus.textContent = ''; modalStatus.className = 'dl-modal-status muted';
+    chosenShow = null;
+    showPage('cat'); modal.hidden = false;
+  }
+  function closeModal() { modal.hidden = true; pendingMagnet = null; chosenShow = null; showPage('cat'); }
+  function setStatus(msg, isErr) {
+    modalStatus.textContent = msg;
+    modalStatus.className = 'dl-modal-status ' + (isErr ? 'leech' : 'seed');
+  }
+
+  function sendDownload(category, savePath) {
+    setStatus('Adding to qBittorrent...', false);
+    var sp = document.createElement('span'); sp.className = 'spinner';
+    modalStatus.appendChild(sp);
+    var payload = { magnet: pendingMagnet, category: category };
+    if (savePath) payload.save_path = savePath;
+    fetch('/download/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function(r) {
+      return r.json().then(function(j) { return { code: r.status, json: j }; });
+    }).then(function(out) {
+      modalStatus.querySelector('.spinner')?.remove();
+      if (out.code === 200 && out.json.ok) {
+        setStatus('\u2714 ' + (out.json.message || 'added'), false);
+        setTimeout(closeModal, 1400);
+      } else {
+        setStatus('\u2718 ' + (out.json.error || 'failed'), true);
+      }
+    }).catch(function(err) {
+      modalStatus.querySelector('.spinner')?.remove();
+      setStatus('\u2718 ' + err, true);
+    });
+  }
+
+  function loadFolderList(listEl, url, emptyMsg) {
+    listEl.innerHTML = '<div class="dl-folder-empty">Loading...</div>';
+    fetch(url).then(function(r) { return r.json(); })
+    .then(function(d) {
+      renderFolderList(listEl, d.folders || [], '', emptyMsg);
+    }).catch(function() {
+      listEl.innerHTML = '<div class="dl-folder-empty">Failed to load</div>';
+    });
+  }
+
+  function renderFolderList(listEl, folders, filter, emptyMsg) {
+    var f = filter.toLowerCase();
+    var matches = folders.filter(function(n) { return !f || n.toLowerCase().indexOf(f) >= 0; });
+    if (!matches.length) {
+      listEl.innerHTML = '<div class="dl-folder-empty">' + emptyMsg + '</div>';
+      return;
+    }
+    listEl.innerHTML = matches.map(function(n) {
+      return '<div class="dl-folder-item" data-folder="' + n.replace(/"/g, '&quot;') + '">' + n + '</div>';
+    }).join('');
+  }
+
+  function createFolder(name, show, callback) {
+    setStatus('Creating folder...', false);
+    var payload = { name: name };
+    if (show) payload.show = show;
+    fetch('/create-tv-folder/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) { callback(d.path); }
+      else { setStatus('\u2718 ' + (d.error || 'failed'), true); }
+    }).catch(function(err) { setStatus('\u2718 ' + err, true); });
+  }
+
+  // --- Main click handler ---
+  document.addEventListener('click', function(e) {
+    // Download button on a row → open at category page
+    var dlBtn = e.target.closest('.dl-btn');
+    if (dlBtn) { openModal(dlBtn.dataset.magnet, dlBtn.dataset.name); return; }
+
+    // Cancel / Back
+    if (e.target.classList.contains('dl-cancel')) { closeModal(); return; }
+    if (e.target.classList.contains('dl-back')) {
+      if (!pageSeason.hidden) showPage('show');
+      else if (!pageShow.hidden) showPage('cat');
+      return;
+    }
+
+    // Page 1: category choice
+    var catBtn = e.target.closest('[data-cat]');
+    if (catBtn && !pageCat.hidden) {
+      var cat = catBtn.dataset.cat;
+      if (cat === 'Movie') { sendDownload('Movie'); return; }
+      if (cat === 'TV Show') {
+        loadFolderList(document.getElementById('dlShowList'), '/list-tv-folders/', 'No shows found');
+        document.getElementById('dlShowFilter').value = '';
+        document.getElementById('dlNewShowName').value = '';
+        showPage('show');
+        document.getElementById('dlShowFilter').focus();
+        return;
+      }
+    }
+
+    // Page 2: pick a show folder
+    var showItem = e.target.closest('.dl-folder-item');
+    if (showItem && !pageShow.hidden) {
+      chosenShow = showItem.dataset.folder;
+      document.getElementById('dlSeasonShowName').textContent = chosenShow;
+      loadFolderList(document.getElementById('dlSeasonList'),
+        '/list-tv-folders/?show=' + encodeURIComponent(chosenShow), 'No seasons yet');
+      document.getElementById('dlSeasonFilter').value = '';
+      document.getElementById('dlNewSeasonName').value = '';
+      showPage('season');
+      document.getElementById('dlSeasonFilter').focus();
+      return;
+    }
+
+    // Page 2: create new show
+    if (e.target.id === 'dlCreateShowBtn') {
+      var newShow = document.getElementById('dlNewShowName').value.trim();
+      if (!newShow) return;
+      createFolder(newShow, null, function(path) {
+        chosenShow = newShow;
+        document.getElementById('dlSeasonShowName').textContent = chosenShow;
+        loadFolderList(document.getElementById('dlSeasonList'),
+          '/list-tv-folders/?show=' + encodeURIComponent(chosenShow), 'No seasons yet');
+        document.getElementById('dlSeasonFilter').value = '';
+        document.getElementById('dlNewSeasonName').value = '';
+        showPage('season');
+        document.getElementById('dlSeasonFilter').focus();
+      });
+      return;
+    }
+
+    // Page 3: pick a season folder
+    var seasonItem = e.target.closest('.dl-folder-item');
+    if (seasonItem && !pageSeason.hidden) {
+      sendDownload('TV Show', tvRoot + '/' + chosenShow + '/' + seasonItem.dataset.folder);
+      return;
+    }
+
+    // Page 3: create new season
+    if (e.target.id === 'dlCreateSeasonBtn') {
+      var newSeason = document.getElementById('dlNewSeasonName').value.trim();
+      if (!newSeason) return;
+      createFolder(newSeason, chosenShow, function(path) {
+        sendDownload('TV Show', path);
+      });
+      return;
+    }
+  });
+
+  // Filter inputs
+  document.getElementById('dlShowFilter').addEventListener('input', function() {
+    var folders = Array.from(document.querySelectorAll('#dlShowList .dl-folder-item')).map(function(el) { return el.dataset.folder; });
+    // re-fetch render from cached list: simpler to just re-load with filter
+  });
+  // Better: store folders when loaded and re-render on filter
+  var showFolders = [], seasonFolders = [];
+  var origLoad = loadFolderList;
+  // Override to cache folder arrays
+  loadFolderList = function(listEl, url, emptyMsg) {
+    listEl.innerHTML = '<div class="dl-folder-empty">Loading...</div>';
+    fetch(url).then(function(r) { return r.json(); })
+    .then(function(d) {
+      var folders = d.folders || [];
+      if (listEl.id === 'dlShowList') showFolders = folders;
+      else seasonFolders = folders;
+      renderFolderList(listEl, folders, '', emptyMsg);
+    }).catch(function() {
+      listEl.innerHTML = '<div class="dl-folder-empty">Failed to load</div>';
+    });
+  };
+
+  document.getElementById('dlShowFilter').addEventListener('input', function() {
+    renderFolderList(document.getElementById('dlShowList'), showFolders, this.value, 'No matching shows');
+  });
+  document.getElementById('dlSeasonFilter').addEventListener('input', function() {
+    renderFolderList(document.getElementById('dlSeasonList'), seasonFolders, this.value, 'No matching seasons');
+  });
+
+  // Create on Enter
+  document.getElementById('dlNewShowName').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('dlCreateShowBtn').click(); }
+  });
+  document.getElementById('dlNewSeasonName').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('dlCreateSeasonBtn').click(); }
+  });
+
+  // Close: click outside or Esc
+  modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && !modal.hidden) closeModal();
+  });
+})();
+</script>
+{% endblock %}

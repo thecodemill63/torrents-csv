@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}torrents-csv{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230f1419'/%3E%3Cpath d='M32 14a18 18 0 1 0 0 36 18 18 0 0 0 0-36zm0 8a10 10 0 0 1 10 10h-6a4 4 0 0 0-8 0h-6a10 10 0 0 1 10-10zM22 36h20v4H22z' fill='%235e9eff'/%3E%3Ccircle cx='27' cy='32' r='3' fill='%235e9eff'/%3E%3Ccircle cx='37' cy='32' r='3' fill='%235e9eff'/%3E%3C/svg%3E">
+  {% load humanize %}
+  <style>
+    :root {
+      --bg:#0f1419; --panel:#1a2230; --border:#2a3445;
+      --text:#d8e1ec; --muted:#8a98aa; --accent:#5e9eff; --accent-hov:#84b8ff;
+      --seed:#4caf50; --leech:#ff7043; --zebra:#151c27;
+      --hover-bg:#22304a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    }
+    header {
+      padding:16px 20px; background:var(--panel); border-bottom:1px solid var(--border);
+      display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+    }
+    header h1 { margin:0; font-size:18px; font-weight:600; color:var(--text); }
+    header h1 .count { color:var(--muted); font-weight:400; font-size:13px; margin-left:8px; }
+    form.search { display:flex; flex:1; min-width:320px; max-width:640px; }
+    form.search input[type=text] {
+      flex:1; padding:9px 12px; background:var(--bg); color:var(--text);
+      border:1px solid var(--border); border-right:none; border-radius:6px 0 0 6px;
+      font-size:14px; outline:none;
+    }
+    form.search input[type=text]:focus { border-color:var(--accent); }
+    form.search button {
+      padding:9px 18px; background:var(--accent); color:#fff;
+      border:none; border-radius:0 6px 6px 0; font-size:14px; cursor:pointer;
+    }
+    form.search button:hover { background:var(--accent-hov); }
+    main { padding:16px 20px; }
+    .result-meta { margin-bottom:12px; font-size:12px; }
+    .results { width:100%; border-collapse:collapse; }
+    .results th, .results td { padding:8px 10px; text-align:left; vertical-align:middle; }
+    .results thead th {
+      background:var(--panel); border-bottom:1px solid var(--border); color:var(--muted);
+      font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.5px;
+      white-space:nowrap; position:sticky; top:0;
+    }
+    .results tbody tr:nth-child(odd) { background:var(--zebra); }
+    .results tbody tr:hover { background:var(--hover-bg); }
+    .results th a { color:var(--muted); text-decoration:none; display:inline-flex; align-items:center; gap:4px; }
+    .results th a:hover { color:var(--accent); }
+    .results th .arrow { opacity:.7; font-size:10px; }
+    .results th.active a { color:var(--accent); }
+    .results td.name { max-width:560px; }
+    .results td.name a { color:var(--text); text-decoration:none; word-break:break-word; }
+    .results td.name a:hover { color:var(--accent); }
+    .seed { color:var(--seed); font-weight:600; }
+    .leech { color:var(--leech); }
+    .muted { color:var(--muted); }
+    .magnet-link {
+      display:inline-block; padding:3px 8px; background:#1f3a52; color:#7ec5ff;
+      border-radius:4px; font-size:11px; text-decoration:none; cursor:pointer;
+      border:1px solid #2a4d6a;
+    }
+    .magnet-link:hover { background:#2a4d6a; }
+    .magnet-icon { margin-right:2px; }
+    .magnet-cell { white-space:nowrap; }
+    .magnet-text {
+      display:none; margin-top:4px; width:340px; max-width:60vw;
+      padding:3px 6px; background:#0a1a2a; color:#7ec5ff; border:1px solid #2a4d6a;
+      border-radius:4px; font-size:11px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      outline:none; user-select:all;
+    }
+    .magnet-text.shown { display:block; }
+    .magnet-reveal.revealed { background:#2a4d6a; }
+    .dl-btn { background:#1f3a52; color:#ffb86c; border-color:#2a4d6a; margin-left:4px; }
+    .dl-btn:hover { background:#2a4d6a; }
+    .dl-btn:disabled, .dl-btn[disabled] { opacity:.45; cursor:default; }
+    .dl-modal {
+      position:fixed; inset:0; background:rgba(0,0,0,.7);
+      display:flex; align-items:center; justify-content:center;
+      z-index:100; animation: dl-fade .15s ease;
+    }
+    .dl-modal[hidden] { display:none; }
+    @keyframes dl-fade { from { opacity:0 } to { opacity:1 } }
+    .dl-modal-card {
+      background:var(--panel); border:1px solid var(--border); border-radius:8px;
+      padding:24px 28px; min-width:340px; max-width:560px;
+      box-shadow:0 8px 32px rgba(0,0,0,.6);
+      text-align:center;
+    }
+    .dl-modal-title { font-size:16px; font-weight:600; margin-bottom:6px; }
+    .dl-modal-name { font-size:12px; color:var(--muted); margin-bottom:18px;
+      word-break:break-word; max-height:64px; overflow-y:auto; }
+    .dl-modal-buttons { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+    .dl-cat {
+      padding:12px 22px; border-radius:6px; border:1px solid var(--border);
+      background:#22304a; color:var(--text); font-size:14px; cursor:pointer;
+    }
+    .dl-cat:hover { background:#2a3a52; border-color:var(--accent); }
+    .dl-cat-movie { background:#2a1f3a; color:#b08cff; border-color:#3a2a5a; }
+    .dl-cat-tv { background:#1f2a3a; color:#5e9eff; border-color:#2a3a5a; }
+    .dl-cancel { background:transparent; color:var(--muted); }
+    .dl-cancel:hover { background:#1a2230; }
+    .dl-modal-status { margin-top:16px; font-size:13px; min-height:18px; }
+    .spinner {
+      display:inline-block; width:14px; height:14px;
+      border:2px solid var(--muted); border-top-color:var(--accent);
+      border-radius:50%; animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    .dl-create-btn { white-space:nowrap; padding:7px 14px; }
+    /* History list */
+    .history-list { max-height:500px; overflow-y:auto; text-align:left; }
+    .history-item {
+      padding:10px 12px; border-bottom:1px solid var(--zebra);
+    }
+    .history-item:hover { background:var(--hover-bg); }
+    .history-row { display:flex; justify-content:space-between; align-items:center; }
+    .history-date { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
+    .history-cat { font-size:11px; font-weight:600; padding:1px 8px; border-radius:3px; }
+    .history-cat.seed { background:rgba(76,175,80,.15); }
+    .history-cat.leech { background:rgba(255,112,67,.15); }
+    .history-name { font-size:13px; margin:4px 0; word-break:break-word; }
+    .history-path { font-size:11px; margin-bottom:4px; }
+    .history-actions { display:flex; gap:6px; }
+    .dl-page[hidden] { display:none; }
+    .dl-folder-filter, .dl-folder-input {
+      width:100%; padding:7px 10px; background:var(--bg); color:var(--text);
+      border:1px solid var(--border); border-radius:4px; font-size:13px;
+      outline:none; margin-bottom:8px;
+    }
+    .dl-folder-filter:focus, .dl-folder-input:focus { border-color:var(--accent); }
+    .dl-folder-list {
+      max-height:180px; overflow-y:auto; border:1px solid var(--border);
+      border-radius:4px; margin-bottom:8px; background:var(--bg);
+    }
+    .dl-folder-item {
+      padding:7px 12px; cursor:pointer; border-bottom:1px solid var(--zebra);
+      font-size:13px; color:var(--text);
+    }
+    .dl-folder-item:hover { background:var(--hover-bg); color:var(--accent); }
+    .dl-folder-item:last-child { border-bottom:none; }
+    .dl-folder-empty { padding:12px; color:var(--muted); font-size:13px; text-align:center; }
+    .dl-new-folder-row { display:flex; gap:6px; }
+    .dl-new-folder-row .dl-folder-input { flex:1; margin-bottom:8px; }
+    .dl-create-btn { white-space:nowrap; padding:7px 14px; }
+    .size, .age { color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; }
+    .num { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+    .empty {
+      text-align:center; padding:64px 20px; color:var(--muted);
+    }
+    .empty .big { font-size:34px; opacity:.4; margin-bottom:8px; }
+    .pagination {
+      margin-top:20px; display:flex; gap:6px; justify-content:center; align-items:center; flex-wrap:wrap;
+    }
+    .pagination a, .pagination span {
+      padding:6px 12px; background:var(--panel); border:1px solid var(--border);
+      border-radius:4px; color:var(--text); text-decoration:none; font-size:13px;
+    }
+    .pagination a:hover { background:var(--hover-bg); border-color:var(--accent); }
+    .pagination .current {
+      background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600;
+    }
+    .pagination .disabled { opacity:.35; cursor:not-allowed; }
+    footer {
+      padding:14px 20px; color:var(--muted); font-size:12px; text-align:center;
+      border-top:1px solid var(--border); margin-top:32px;
+    }
+    footer a { color:var(--muted); text-decoration:none; }
+    footer a:hover { color:var(--accent); }
+    @media (max-width:720px) { .hide-sm { display:none; } }
+    .history-btn {
+      padding:8px 14px; background:var(--panel); color:var(--text);
+      border:1px solid var(--border); border-radius:6px; cursor:pointer;
+      font-size:13px; white-space:nowrap;
+    }
+    .history-btn:hover { background:var(--hover-bg); border-color:var(--accent); }
+    .dl-modal-name { font-size:12px; color:var(--muted); margin-bottom:18px;
+      word-break:break-word; max-height:64px; overflow-y:auto; }
+    .dl-modal-buttons { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+    .dl-modal-buttons .dl-cat {
+      padding:12px 22px; border-radius:6px; border:1px solid var(--border);
+      background:#22304a; color:var(--text); font-size:14px; cursor:pointer;
+    }
+    .dl-modal-buttons .dl-cat:hover { background:#2a3a52; border-color:var(--accent); }
+    .dl-modal-buttons .dl-cat-movie { background:#2a1f3a; color:#b08cff; border-color:#3a2a5a; }
+    .dl-modal-buttons .dl-cat-tv { background:#1f2a3a; color:#5e9eff; border-color:#2a3a5a; }
+    .dl-modal-buttons .dl-cancel { background:transparent; color:var(--muted); }
+    .dl-modal-buttons .dl-cancel:hover { background:#1a2230; }
+    .dl-modal-status { margin-top:16px; font-size:13px; min-height:18px; }
+    .spinner {
+      display:inline-block; width:14px; height:14px;
+      border:2px solid var(--muted); border-top-color:var(--accent);
+      border-radius:50%; animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg) } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Torrents<span class="count">{{ total_count|default:""|intcomma }} torrents indexed</span></h1>
+    <form class="search" method="get" action="/">
+      <input type="text" name="q" value="{{ q|default:'' }}" placeholder="Search by name..." autocomplete="off">
+      <button type="submit">Search</button>
+    </form>
+    <button type="button" id="historyBtn" class="history-btn" title="Download history">&#128218; History</button>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+    {% block content_after %}{% endblock %}
+  </main>
+  <footer>
+    Local UI &middot;
+    <a href="https://codeberg.org/heretic/torrents-csv-data">upstream data</a>
+  </footer>
+
+  <!-- History modal -->
+  <div class="dl-modal" id="historyModal" hidden>
+    <div class="dl-modal-card" style="min-width:600px;max-width:900px">
+      <div class="dl-modal-title">Download History</div>
+      <div id="historyList" class="history-list"></div>
+      <div class="dl-modal-buttons">
+        <button type="button" class="dl-cat dl-cancel" onclick="document.getElementById('historyModal').hidden=true">Close</button>
+      </div>
+      <div class="dl-modal-status muted" id="historyStatus"></div>
+    </div>
+  </div>
+
+  <script>
+  (function() {
+    var histBtn = document.getElementById('historyBtn');
+    var histModal = document.getElementById('historyModal');
+    var histList = document.getElementById('historyList');
+    var histStatus = document.getElementById('historyStatus');
+    if (!histBtn) return;
+
+    function openHistory() {
+      histList.innerHTML = '<div class="dl-folder-empty">Loading...</div>';
+      histStatus.textContent = '';
+      histModal.hidden = false;
+      fetch('/history/').then(function(r) { return r.json(); })
+      .then(function(d) {
+        var items = d.downloads || [];
+        if (!items.length) {
+          histList.innerHTML = '<div class="dl-folder-empty">No downloads yet.</div>';
+          return;
+        }
+        histList.innerHTML = items.map(function(it) {
+          var date = new Date(it.ts * 1000).toLocaleString();
+          var shortName = (it.name || '(unnamed)').substring(0, 60);
+          var cat = it.category || '';
+          var path = it.save_path || '';
+          var magnet = it.magnet || '';
+          var magnetShort = magnet.substring(0, 80) + '...';
+          return '<div class="history-item">'
+            + '<div class="history-row"><span class="history-date">' + date + '</span>'
+            + '<span class="history-cat ' + (cat === 'Movie' ? 'seed' : 'leech') + '">' + cat + '</span></div>'
+            + '<div class="history-name" title="' + (it.name || '') + '">' + shortName + '</div>'
+            + (path ? '<div class="history-path muted">' + path + '</div>' : '')
+            + '<div class="history-actions">'
+            + '<button class="magnet-link history-redl" data-magnet="' + magnet.replace(/"/g, '&quot;') + '" data-cat="' + cat + '" data-path="' + path.replace(/"/g, '&quot;') + '">&#11015; re-download</button>'
+            + '<button class="magnet-link history-copy" data-magnet="' + magnet.replace(/"/g, '&quot;') + '">&#129728; copy magnet</button>'
+            + '</div>'
+            + '</div>';
+        }).join('');
+      }).catch(function() {
+        histList.innerHTML = '<div class="dl-folder-empty">Failed to load history.</div>';
+      });
+    }
+
+    histBtn.addEventListener('click', openHistory);
+    histModal.addEventListener('click', function(e) {
+      if (e.target === histModal) histModal.hidden = true;
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && !histModal.hidden) histModal.hidden = true;
+    });
+
+    // Re-download from history
+    histList.addEventListener('click', function(e) {
+      var redl = e.target.closest('.history-redl');
+      if (redl) {
+        var payload = { magnet: redl.dataset.magnet, category: redl.dataset.cat };
+        if (redl.dataset.path) payload.save_path = redl.dataset.path;
+        histStatus.textContent = 'Re-downloading...';
+        fetch('/download/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function(r) { return r.json(); })
+        .then(function(d) {
+          histStatus.textContent = d.ok ? '\u2714 ' + (d.message || 'added') : '\u2718 ' + (d.error || 'failed');
+          histStatus.className = 'dl-modal-status ' + (d.ok ? 'seed' : 'leech');
+        }).catch(function(err) {
+          histStatus.textContent = '\u2718 ' + err;
+          histStatus.className = 'dl-modal-status leech';
+        });
+        return;
+      }
+      var copy = e.target.closest('.history-copy');
+      if (copy) {
+        var mag = copy.dataset.magnet;
+        navigator.clipboard.writeText(mag).then(function() {
+          copy.textContent = '\u2714 copied!';
+          setTimeout(function() { copy.innerHTML = '&#129728; copy magnet'; }, 1500);
+        });
+        return;
+      }
+    });
+  })();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
