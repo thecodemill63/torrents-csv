@@ -82,6 +82,51 @@ else
     ok "Django installed"
 fi
 
+# Install qBittorrent if missing
+if [ "$has_qbt" -eq 0 ]; then
+    info "qBittorrent not found. Installing..."
+    if [ "$OS" = "mac" ]; then
+        if [ "$has_brew" -eq 0 ]; then
+            warn "Homebrew not found — cannot auto-install qBittorrent"
+            warn "Install Homebrew (https://brew.sh) then re-run, or install qBittorrent manually from https://www.qbittorrent.org"
+        else
+            brew install --cask qbittorrent || warn "failed to install qBittorrent via brew"
+            has_qbt=1
+        fi
+    elif [ "$has_nix" -eq 1 ]; then
+        warn "On NixOS, install qBittorrent via your system config:"
+        warn "  Add 'qbittorrent' to environment.systemPackages and rebuild"
+        warn "  Or run:  nix-shell -p qbittorrent --run qbittorrent"
+    else
+        info "Attempting to install qBittorrent via package manager..."
+        if command -v apt >/dev/null 2>&1; then
+            sudo apt update && sudo apt install -y qbittorrent || warn "failed to install via apt"
+            has_qbt=1
+        elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y qbittorrent || warn "failed to install via dnf"
+            has_qbt=1
+        elif command -v pacman >/dev/null 2>&1; then
+            sudo pacman -S --noconfirm qbittorrent || warn "failed to install via pacman"
+            has_qbt=1
+        elif command -v zypper >/dev/null 2>&1; then
+            sudo zypper install -y qbittorrent || warn "failed to install via zypper"
+            has_qbt=1
+        else
+            warn "Unknown package manager. Install qBittorrent manually from https://www.qbittorrent.org"
+        fi
+    fi
+    # Re-check
+    if command -v qbittorrent >/dev/null 2>&1 || command -v qbittorrent-nox >/dev/null 2>&1; then
+        ok "qBittorrent installed"
+        has_qbt=1
+    else
+        warn "qBittorrent could not be installed automatically."
+        warn "The download feature will not work until you install it manually."
+        warn "Get it from: https://www.qbittorrent.org/download"
+        warn "You can still use the search UI — just skip the qBittorrent config below."
+    fi
+fi
+
 # ── Interactive configuration ────────────────────────────────────────────
 echo ""
 info "Let's configure your installation."
@@ -119,34 +164,42 @@ MOVIES_ROOT="${MOVIES_ROOT:-$DEFAULT_MOVIES}"
 mkdir -p "$MOVIES_ROOT" 2>/dev/null || warn "could not create $MOVIES_ROOT"
 ok "Movies root: $MOVIES_ROOT"
 
-# qBittorrent WebUI config
-echo ""
-info "qBittorrent WebUI configuration."
-info "You need qBittorrent running with WebUI enabled."
-info "  To enable: qBittorrent → Tools → Preferences → Web UI → Enable"
-echo ""
+# qBittorrent WebUI config (skip if qBt wasn't installed)
+if [ "$has_qbt" -eq 1 ]; then
+    echo ""
+    info "qBittorrent WebUI configuration."
+    info "You need qBittorrent running with WebUI enabled."
+    info "  To enable: qBittorrent → Tools → Preferences → Web UI → Enable"
+    echo ""
 
-DEFAULT_QBT_URL="http://localhost:8081"
-prompt QBT_URL "qBittorrent WebUI URL? [$DEFAULT_QBT_URL]"
-QBT_URL="${QBT_URL:-$DEFAULT_QBT_URL}"
+    DEFAULT_QBT_URL="http://localhost:8081"
+    prompt QBT_URL "qBittorrent WebUI URL? [$DEFAULT_QBT_URL]"
+    QBT_URL="${QBT_URL:-$DEFAULT_QBT_URL}"
 
-prompt QBT_USER "qBittorrent WebUI username? [admin]"
-QBT_USER="${QBT_USER:-admin}"
+    prompt QBT_USER "qBittorrent WebUI username? [admin]"
+    QBT_USER="${QBT_USER:-admin}"
 
-prompt QBT_PASS "qBittorrent WebUI password? "
-[ -z "$QBT_PASS" ] && warn "no password set — qBittorrent may reject requests" || ok "password set"
+    prompt QBT_PASS "qBittorrent WebUI password? "
+    [ -z "$QBT_PASS" ] && warn "no password set — qBittorrent may reject requests" || ok "password set"
 
-# Test qBt connection
-info "Testing qBittorrent connection..."
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -m 5 -X POST "$QBT_URL/api/v2/auth/login" -d "username=$QBT_USER&password=$QBT_PASS" 2>/dev/null || echo "000")
-if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]; then
-    ok "qBittorrent connection successful"
-elif [ "$HTTP_CODE" = "403" ]; then
-    warn "qBittorrent returned 403 (may be banned or credentials wrong)"
-    warn "You can fix this later in qBittorrent → Preferences → Web UI"
+    # Test qBt connection
+    info "Testing qBittorrent connection..."
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -m 5 -X POST "$QBT_URL/api/v2/auth/login" -d "username=$QBT_USER&password=$QBT_PASS" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]; then
+        ok "qBittorrent connection successful"
+    elif [ "$HTTP_CODE" = "403" ]; then
+        warn "qBittorrent returned 403 (may be banned or credentials wrong)"
+        warn "You can fix this later in qBittorrent → Preferences → Web UI"
+    else
+        warn "qBittorrent not reachable at $QBT_URL (HTTP $HTTP_CODE)"
+        warn "Make sure qBittorrent is running with WebUI enabled. You can fix this later."
+    fi
 else
-    warn "qBittorrent not reachable at $QBT_URL (HTTP $HTTP_CODE)"
-    warn "Make sure qBittorrent is running with WebUI enabled. You can fix this later."
+    warn "Skipping qBittorrent config (not installed)."
+    warn "Re-run the installer after installing qBittorrent to enable downloads."
+    QBT_URL="http://localhost:8081"
+    QBT_USER="admin"
+    QBT_PASS=""
 fi
 
 # Generate Django secret key
