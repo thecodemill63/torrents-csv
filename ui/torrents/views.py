@@ -5,6 +5,7 @@ and /list-tv-folders/ + /create-tv-folder/ for the TV Show folder picker.
 import json
 import logging
 import os
+import re
 from urllib.parse import urlencode
 
 from django.core.paginator import Paginator
@@ -160,6 +161,29 @@ def download(request):
         log.exception("qBt add crashed")
         return JsonResponse({"error": f"internal: {e}"}, status=500)
     ok = (result == "Ok.") or (result and "added_torrent_ids" in result)
+    # Clean up URL-prefixed folder names in the save path.
+    # qBittorrent may not have created the folder yet, so we do an immediate
+    # check plus a delayed retry in a background thread.
+    cleanup = {"renamed": False}
+    if ok and save_path:
+        try:
+            cleanup = _cleanup_url_prefixes(save_path, magnet)
+        except Exception as exc:
+            log.warning("cleanup failed: %s", exc)
+        if not cleanup.get("renamed"):
+            # Schedule a delayed retry — qBt may create the folder shortly.
+            import threading
+            def _delayed_cleanup():
+                import time as _t
+                _t.sleep(10)
+                try:
+                    c = _cleanup_url_prefixes(save_path, magnet)
+                    if c.get("renamed"):
+                        log.info("delayed cleanup: %s -> %s", c["old_name"], c["new_name"])
+                except Exception as e:
+                    log.warning("delayed cleanup failed: %s", e)
+            t = threading.Thread(target=_delayed_cleanup, daemon=True)
+            t.start()
     # Log to downloads history table.
     import time as _time
     try:
@@ -177,7 +201,10 @@ def download(request):
     except Exception as exc:
         log.warning("failed to log download: %s", exc)
     if ok:
-        return JsonResponse({"ok": True, "message": f"added to qBittorrent as {category}"})
+        msg = f"added to qBittorrent as {category}"
+        if cleanup.get("renamed"):
+            msg += f" (renamed: {cleanup['old_name']} -> {cleanup['new_name']})"
+        return JsonResponse({"ok": True, "message": msg})
     return JsonResponse({"ok": True, "message": f"added to qBittorrent as {category} (qBt reply: {result!r})"})
 
 
@@ -191,6 +218,62 @@ def _extract_name_from_magnet(magnet):
         if k == "dn":
             return v
     return magnet[:80]
+
+
+# Pattern: leading www.<domain> followed by separator chars and optional dash.
+_URL_PREFIX_RE = re.compile(
+    r"^(www\.[a-zA-Z0-9._-]+\s*[-—–\s]*)(.*)", re.IGNORECASE
+)
+
+
+def _clean_folder_name(name):
+    """Strip leading URL prefixes (www.UIndex.org -, www.YTS.MX -, etc.)
+    from a folder/file name. Returns the cleaned name, or the original
+    if no URL prefix was found."""
+    m = _URL_PREFIX_RE.match(name)
+    if m:
+        cleaned = m.group(2).strip()
+        if cleaned:
+            return cleaned
+    return name
+
+
+def _cleanup_url_prefixes(save_path, magnet):
+    """After a torrent is added to qBittorrent, check if the save_path
+    contains a folder with a URL prefix (e.g. 'www.UIndex.org - Movie Name')
+    and rename it to the clean name. Also renames inside qBittorrent's
+    torrent list via the API if possible.
+
+    Returns a dict with cleanup details for logging.
+    """
+    result = {"renamed": False, "old_name": None, "new_name": None}
+    if not save_path or not os.path.isdir(save_path):
+        return result
+    # The torrent name from the magnet's dn field is the likely folder name.
+    torrent_name = _extract_name_from_magnet(magnet)
+    # Check the save_path directory for URL-prefixed entries.
+    try:
+        entries = os.listdir(save_path)
+    except OSError:
+        return result
+    for entry in entries:
+        entry_path = os.path.join(save_path, entry)
+        if not os.path.isdir(entry_path):
+            continue
+        cleaned = _clean_folder_name(entry)
+        if cleaned != entry:
+            new_path = os.path.join(save_path, cleaned)
+            if os.path.exists(new_path):
+                # Name collision — skip to avoid data loss.
+                continue
+            try:
+                os.rename(entry_path, new_path)
+                result = {"renamed": True, "old_name": entry, "new_name": cleaned}
+                log.info("renamed %s -> %s in %s", entry, cleaned, save_path)
+            except OSError as e:
+                log.warning("could not rename %s: %s", entry_path, e)
+            break
+    return result
 
 
 @csrf_exempt
