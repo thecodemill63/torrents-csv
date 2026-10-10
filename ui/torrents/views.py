@@ -315,8 +315,8 @@ def history(request):
 @csrf_exempt
 def list_tv_folders(request):
     """GET /list-tv-folders/?show=<name>
-    No show param → list shows in /mnt/media/TV.
-    With show param → list season folders in /mnt/media/TV/<show>.
+    No show param → list shows in the TV root (env: TORRENTS_TV_ROOT).
+    With show param → list season folders in <TV_ROOT>/<show>.
     Returns {"folders": ["1883", "MobLand", ...]} or {"folders": ["Season 1", ...]}.
     """
     if request.method != "GET":
@@ -338,8 +338,8 @@ def list_tv_folders(request):
 @csrf_exempt
 def create_tv_folder(request):
     """POST /create-tv-folder/  body: {"name": "NewShow", "show": "OptionalShowName"}
-    Without show → creates /mnt/media/TV/<name>.
-    With show → creates /mnt/media/TV/<show>/<name> (a season folder).
+    Without show → creates <TV_ROOT>/<name>.
+    With show → creates <TV_ROOT>/<show>/<name> (a season folder).
     Returns {"ok": true, "path": "...", "name": "..."}.
     """
     if request.method != "POST":
