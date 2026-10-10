@@ -161,29 +161,14 @@ def download(request):
         log.exception("qBt add crashed")
         return JsonResponse({"error": f"internal: {e}"}, status=500)
     ok = (result == "Ok.") or (result and "added_torrent_ids" in result)
-    # Clean up URL-prefixed folder names in the save path.
-    # qBittorrent may not have created the folder yet, so we do an immediate
-    # check plus a delayed retry in a background thread.
+    # Clean up URL-prefixed folder names. The function polls for up to ~30s
+    # waiting for qBittorrent to create the folder, then renames it.
     cleanup = {"renamed": False}
     if ok and save_path:
         try:
             cleanup = _cleanup_url_prefixes(save_path, magnet)
         except Exception as exc:
             log.warning("cleanup failed: %s", exc)
-        if not cleanup.get("renamed"):
-            # Schedule a delayed retry — qBt may create the folder shortly.
-            import threading
-            def _delayed_cleanup():
-                import time as _t
-                _t.sleep(10)
-                try:
-                    c = _cleanup_url_prefixes(save_path, magnet)
-                    if c.get("renamed"):
-                        log.info("delayed cleanup: %s -> %s", c["old_name"], c["new_name"])
-                except Exception as e:
-                    log.warning("delayed cleanup failed: %s", e)
-            t = threading.Thread(target=_delayed_cleanup, daemon=True)
-            t.start()
     # Log to downloads history table.
     import time as _time
     try:
@@ -239,40 +224,58 @@ def _clean_folder_name(name):
 
 
 def _cleanup_url_prefixes(save_path, magnet):
-    """After a torrent is added to qBittorrent, check if the save_path
-    contains a folder with a URL prefix (e.g. 'www.UIndex.org - Movie Name')
-    and rename it to the clean name. Also renames inside qBittorrent's
-    torrent list via the API if possible.
+    """After a torrent is added to qBittorrent, check if the torrent's
+    folder name in the save_path has a URL prefix (e.g. 'www.UIndex.org -
+    Movie Name') and rename it to the clean name.
+
+    Uses the magnet's dn (display name) field to know what folder qBt will
+    create, so we don't need to wait for qBt to actually create it.
 
     Returns a dict with cleanup details for logging.
     """
     result = {"renamed": False, "old_name": None, "new_name": None}
-    if not save_path or not os.path.isdir(save_path):
+    if not save_path:
         return result
-    # The torrent name from the magnet's dn field is the likely folder name.
+    # The torrent name from the magnet's dn field is the folder name qBt creates.
     torrent_name = _extract_name_from_magnet(magnet)
-    # Check the save_path directory for URL-prefixed entries.
-    try:
-        entries = os.listdir(save_path)
-    except OSError:
+    if not torrent_name:
         return result
-    for entry in entries:
-        entry_path = os.path.join(save_path, entry)
-        if not os.path.isdir(entry_path):
-            continue
-        cleaned = _clean_folder_name(entry)
-        if cleaned != entry:
-            new_path = os.path.join(save_path, cleaned)
-            if os.path.exists(new_path):
-                # Name collision — skip to avoid data loss.
-                continue
-            try:
-                os.rename(entry_path, new_path)
-                result = {"renamed": True, "old_name": entry, "new_name": cleaned}
-                log.info("renamed %s -> %s in %s", entry, cleaned, save_path)
-            except OSError as e:
-                log.warning("could not rename %s: %s", entry_path, e)
+    # Check if the torrent name itself has a URL prefix.
+    cleaned = _clean_folder_name(torrent_name)
+    if cleaned == torrent_name:
+        # No URL prefix in the name — nothing to do.
+        return result
+    # The folder qBt will create (or has created) is save_path / torrent_name
+    old_path = os.path.join(save_path, torrent_name)
+    new_path = os.path.join(save_path, cleaned)
+    # Wait for qBt to create the folder (up to ~30s).
+    import time as _t
+    for _ in range(30):
+        if os.path.isdir(old_path):
             break
+        _t.sleep(1)
+    if not os.path.isdir(old_path):
+        # Folder never appeared — may have been renamed already or qBt used a
+        # different name. Try listing the dir for any URL-prefixed entry.
+        try:
+            for entry in os.listdir(save_path):
+                if _clean_folder_name(entry) != entry:
+                    old_path = os.path.join(save_path, entry)
+                    new_path = os.path.join(save_path, _clean_folder_name(entry))
+                    break
+        except OSError:
+            pass
+    if not os.path.isdir(old_path):
+        return result
+    if os.path.exists(new_path):
+        return result  # collision, skip
+    try:
+        os.rename(old_path, new_path)
+        result = {"renamed": True, "old_name": os.path.basename(old_path),
+                  "new_name": os.path.basename(new_path)}
+        log.info("renamed %s -> %s in %s", result["old_name"], result["new_name"], save_path)
+    except OSError as e:
+        log.warning("could not rename %s: %s", old_path, e)
     return result
 
 
@@ -312,8 +315,8 @@ def history(request):
 @csrf_exempt
 def list_tv_folders(request):
     """GET /list-tv-folders/?show=<name>
-    No show param → list shows in the TV root (env: TORRENTS_TV_ROOT).
-    With show param → list season folders in <TV_ROOT>/<show>.
+    No show param → list shows in /mnt/media/TV.
+    With show param → list season folders in /mnt/media/TV/<show>.
     Returns {"folders": ["1883", "MobLand", ...]} or {"folders": ["Season 1", ...]}.
     """
     if request.method != "GET":
@@ -335,8 +338,8 @@ def list_tv_folders(request):
 @csrf_exempt
 def create_tv_folder(request):
     """POST /create-tv-folder/  body: {"name": "NewShow", "show": "OptionalShowName"}
-    Without show → creates <TV_ROOT>/<name>.
-    With show → creates <TV_ROOT>/<show>/<name> (a season folder).
+    Without show → creates /mnt/media/TV/<name>.
+    With show → creates /mnt/media/TV/<show>/<name> (a season folder).
     Returns {"ok": true, "path": "...", "name": "..."}.
     """
     if request.method != "POST":
