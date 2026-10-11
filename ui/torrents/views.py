@@ -290,6 +290,38 @@ def app_config(request):
 
 
 @csrf_exempt
+def sync_status(request):
+    """GET /sync-status/ → latest sync run info for the header badge.
+    Returns {"last_run": <unix_ts>, "status": "ok"|"no-change"|"failed",
+            "rows_new": N, "rows_total": N, "ago_seconds": N}
+    """
+    if request.method != "GET":
+        return JsonResponse({"error": "GET required"}, status=405)
+    from django.db import connection
+    import time as _t
+    try:
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT started_at, status, rows_new, rows_total "
+                "FROM syncs ORDER BY sync_id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+    except Exception:
+        return JsonResponse({"error": "syncs table not available"}, status=500)
+    if not row:
+        return JsonResponse({"last_run": None, "status": "never", "rows_new": 0})
+    started, status, rows_new, rows_total = row
+    now = int(_t.time())
+    return JsonResponse({
+        "last_run": started,
+        "status": status,
+        "rows_new": rows_new or 0,
+        "rows_total": rows_total or 0,
+        "ago_seconds": now - started if started else 0,
+    })
+
+
+@csrf_exempt
 def history(request):
     """GET /history/ → {"downloads": [{id, ts, name, magnet, category, save_path}, ...]}
     Returns the most recent 200 downloads, newest first.
@@ -315,8 +347,8 @@ def history(request):
 @csrf_exempt
 def list_tv_folders(request):
     """GET /list-tv-folders/?show=<name>
-    No show param → list shows in the TV root (env: TORRENTS_TV_ROOT).
-    With show param → list season folders in <TV_ROOT>/<show>.
+    No show param → list shows in /mnt/media/TV.
+    With show param → list season folders in /mnt/media/TV/<show>.
     Returns {"folders": ["1883", "MobLand", ...]} or {"folders": ["Season 1", ...]}.
     """
     if request.method != "GET":
@@ -338,8 +370,8 @@ def list_tv_folders(request):
 @csrf_exempt
 def create_tv_folder(request):
     """POST /create-tv-folder/  body: {"name": "NewShow", "show": "OptionalShowName"}
-    Without show → creates <TV_ROOT>/<name>.
-    With show → creates <TV_ROOT>/<show>/<name> (a season folder).
+    Without show → creates /mnt/media/TV/<name>.
+    With show → creates /mnt/media/TV/<show>/<name> (a season folder).
     Returns {"ok": true, "path": "...", "name": "..."}.
     """
     if request.method != "POST":

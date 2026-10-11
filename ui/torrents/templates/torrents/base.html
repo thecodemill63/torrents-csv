@@ -176,6 +176,14 @@
       font-size:13px; white-space:nowrap;
     }
     .history-btn:hover { background:var(--hover-bg); border-color:var(--accent); }
+    .sync-badge {
+      font-size:11px; padding:4px 10px; border-radius:4px;
+      background:var(--panel); border:1px solid var(--border);
+      white-space:nowrap; display:inline-flex; align-items:center; gap:4px;
+    }
+    .sync-badge.sync-ok { border-color:var(--seed); color:var(--seed); }
+    .sync-badge.sync-none { border-color:var(--muted); color:var(--muted); }
+    .sync-badge.sync-new { border-color:var(--accent); color:var(--accent); }
     .dl-modal-name { font-size:12px; color:var(--muted); margin-bottom:18px;
       word-break:break-word; max-height:64px; overflow-y:auto; }
     .dl-modal-buttons { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
@@ -205,6 +213,7 @@
       <button type="submit">Search</button>
     </form>
     <button type="button" id="historyBtn" class="history-btn" title="Download history">&#128218; History</button>
+    <span id="syncBadge" class="sync-badge muted" title="Sync status">loading...</span>
   </header>
   <main>
     {% block content %}{% endblock %}
@@ -308,6 +317,50 @@
         return;
       }
     });
+  })();
+  </script>
+  <script>
+  // --- Sync status badge ---
+  (function() {
+    var badge = document.getElementById('syncBadge');
+    if (!badge) return;
+    function relTime(sec) {
+      if (sec < 60) return sec + 's ago';
+      if (sec < 3600) return Math.round(sec / 60) + 'm ago';
+      if (sec < 86400) return Math.round(sec / 3600) + 'h ago';
+      return Math.round(sec / 86400) + 'd ago';
+    }
+    function updateBadge() {
+      fetch('/sync-status/').then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (!d.last_run) { badge.textContent = '\u{1F504} never synced'; badge.className = 'sync-badge sync-none'; return; }
+        var ago = relTime(d.ago_seconds);
+        var cls = 'sync-badge ';
+        var icon = '\u{1F504} ';
+        var text = ago;
+        if (d.status === 'ok' && d.rows_new > 0) {
+          cls += 'sync-new';
+          text = ago + ' \u00b7 +' + d.rows_new.toLocaleString() + ' new';
+        } else if (d.status === 'ok') {
+          cls += 'sync-ok';
+          text = ago + ' \u00b7 ' + d.rows_total.toLocaleString() + ' total';
+        } else if (d.status === 'no-change') {
+          cls += 'sync-none';
+          text = ago + ' \u00b7 no changes';
+        } else {
+          cls += 'sync-none';
+          icon = '\u26A0 ';
+          text = ago + ' \u00b7 ' + d.status;
+        }
+        badge.textContent = icon + text;
+        badge.className = cls;
+      }).catch(function() {
+        badge.textContent = '\u26A0 sync status unavailable';
+        badge.className = 'sync-badge sync-none';
+      });
+    }
+    updateBadge();
+    setInterval(updateBadge, 60000);
   })();
   </script>
   {% block scripts %}{% endblock %}

@@ -7,6 +7,7 @@ urlpatterns = [
     path("download/", views.download, name="download"),
     path("history/", views.history, name="history"),
     path("config/", views.app_config, name="app_config"),
+    path("sync-status/", views.sync_status, name="sync_status"),
     path("list-tv-folders/", views.list_tv_folders, name="list_tv_folders"),
     path("create-tv-folder/", views.create_tv_folder, name="create_tv_folder"),
 ]
